@@ -502,8 +502,7 @@ static ISeq seqFrom(Object coll){
 	else {
 		Class c = coll.getClass();
 		Class sc = c.getSuperclass();
-		throw new ExceptionInfo("Don't know how to create ISeq from: " + c.getName(),
-                                        map(Keyword.intern("instance"), coll));
+		throw new IllegalArgumentException("Don't know how to create ISeq from: " + c.getName());
 	}
 }
 
@@ -1735,12 +1734,7 @@ static public String printString(Object x){
 
 static public Object readString(String s){
 	PushbackReader r = new PushbackReader(new StringReader(s));
-	try {
-		return LispReader.read(r, true, null, false);
-	}
-	catch(Exception e) {
-		throw Util.sneakyThrow(e);
-	}
+	return LispReader.read(r, true, null, false);
 }
 
 static public void print(Object x, Writer w) throws IOException{

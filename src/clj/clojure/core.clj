@@ -501,6 +501,13 @@
    :static true}
   [x] (if x false true))
 
+(defn some?
+  "Returns true if x is not nil, false otherwise."
+  {:tag Boolean
+   :added "1.6"
+   :static true}
+  [x] (not (nil? x)))
+
 (defn str
   "With no args, returns the empty string. With one arg x, returns
   x.toString().  (str nil) returns the empty string. With more than
@@ -1317,6 +1324,12 @@
    :added "1.0"}
   [x n] (. clojure.lang.Numbers shiftRight x n))
 
+(defn unsigned-bit-shift-right
+  "Bitwise shift right, without sign-extension."
+  {:inline (fn [x n] `(. clojure.lang.Numbers (unsignedShiftRight ~x ~n)))
+   :added "1.6"}
+  [x n] (. clojure.lang.Numbers unsignedShiftRight x n))
+
 (defn integer?
   "Returns true if n is an integer"
   {:added "1.0"
@@ -1463,13 +1476,13 @@
         (with-meta ret (meta map)))))
 
 (defn keys
-  "Returns a sequence of the map's keys."
+  "Returns a sequence of the map's keys, in the same order as (seq map)."
   {:added "1.0"
    :static true}
   [map] (. clojure.lang.RT (keys map)))
 
 (defn vals
-  "Returns a sequence of the map's values."
+  "Returns a sequence of the map's values, in the same order as (seq map)."
   {:added "1.0"
    :static true}
   [map] (. clojure.lang.RT (vals map)))
@@ -1548,22 +1561,31 @@
   list already. If there are more forms, inserts the first form as the
   second item in second form, etc."
   {:added "1.0"}
-  ([x] x)
-  ([x form] (if (seq? form)
-              (with-meta `(~(first form) ~x ~@(next form)) (meta form))
-              (list form x)))
-  ([x form & more] `(-> (-> ~x ~form) ~@more)))
+  [x & forms]
+  (loop [x x, forms forms]
+    (if forms
+      (let [form (first forms)
+            threaded (if (seq? form)
+                       (with-meta `(~(first form) ~x ~@(next form)) (meta form))
+                       (list form x))]
+        (recur threaded (next forms)))
+      x)))
 
 (defmacro ->>
   "Threads the expr through the forms. Inserts x as the
   last item in the first form, making a list of it if it is not a
   list already. If there are more forms, inserts the first form as the
   last item in second form, etc."
-  {:added "1.1"} 
-  ([x form] (if (seq? form)
+  {:added "1.1"}
+  [x & forms]
+  (loop [x x, forms forms]
+    (if forms
+      (let [form (first forms)
+            threaded (if (seq? form)
               (with-meta `(~(first form) ~@(next form)  ~x) (meta form))
-              (list form x)))
-  ([x form & more] `(->> (->> ~x ~form) ~@more)))
+              (list form x))]
+        (recur threaded (next forms)))
+      x)))
 
 (def map)
 
@@ -1586,9 +1608,24 @@
   The docstring and attribute-map are optional.
 
   Options are key-value pairs and may be one of:
-    :default    the default dispatch value, defaults to :default
-    :hierarchy  the isa? hierarchy to use for dispatching
-                defaults to the global hierarchy"
+
+  :default
+
+  The default dispatch value, defaults to :default
+
+  :hierarchy
+
+  The value used for hierarchical dispatch (e.g. ::square is-a ::shape)
+
+  Hierarchies are type-like relationships that do not depend upon type
+  inheritance. By default Clojure's multimethods dispatch off of a
+  global hierarchy map.  However, a hierarchy relationship can be
+  created with the derive function used to augment the root ancestor
+  created with make-hierarchy.
+
+  Multimethods expect the value of the hierarchy option to be supplied as
+  a reference type e.g. a var (i.e. via the Var-quote dispatch macro #'
+  or the var special form)."
   {:arglists '([name docstring? attr-map? dispatch-fn & options])
    :added "1.0"}
   [mm-name & options]
@@ -1713,6 +1750,43 @@
    (let [form (bindings 0) tst (bindings 1)]
     `(let [temp# ~tst]
        (when temp#
+         (let [~form temp#]
+           ~@body)))))
+
+(defmacro if-some
+  "bindings => binding-form test
+
+   If test is not nil, evaluates then with binding-form bound to the
+   value of test, if not, yields else"
+  {:added "1.6"}
+  ([bindings then]
+   `(if-some ~bindings ~then nil))
+  ([bindings then else & oldform]
+   (assert-args
+     (vector? bindings) "a vector for its binding"
+     (nil? oldform) "1 or 2 forms after binding vector"
+     (= 2 (count bindings)) "exactly 2 forms in binding vector")
+   (let [form (bindings 0) tst (bindings 1)]
+     `(let [temp# ~tst]
+        (if (nil? temp#)
+          ~else
+          (let [~form temp#]
+            ~then))))))
+
+(defmacro when-some
+  "bindings => binding-form test
+
+   When test is not nil, evaluates body with binding-form bound to the
+   value of test"
+  {:added "1.6"}
+  [bindings & body]
+  (assert-args
+     (vector? bindings) "a vector for its binding"
+     (= 2 (count bindings)) "exactly 2 forms in binding vector")
+   (let [form (bindings 0) tst (bindings 1)]
+    `(let [temp# ~tst]
+       (if (nil? temp#)
+         nil
          (let [~form temp#]
            ~@body)))))
 
@@ -1948,8 +2022,7 @@
   [] (clojure.lang.Agent/releasePendingSends))
 
 (defn add-watch
-  "Alpha - subject to change.
-  Adds a watch function to an agent/atom/var/ref reference. The watch
+  "Adds a watch function to an agent/atom/var/ref reference. The watch
   fn must be a fn of 4 args: a key, the reference, its old-state, its
   new-state. Whenever the reference's state might have been changed,
   any registered watches will have their functions called. The watch fn
@@ -1967,8 +2040,7 @@
   [^clojure.lang.IRef reference key fn] (.addWatch reference key fn))
 
 (defn remove-watch
-  "Alpha - subject to change.
-  Removes a watch (set by add-watch) from a reference"
+  "Removes a watch (set by add-watch) from a reference"
   {:added "1.0"
    :static true}
   [^clojure.lang.IRef reference key]
@@ -2981,16 +3053,14 @@
 
 ;;;;;;;;;;;;;;;;;;;;; editable collections ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn transient 
-  "Alpha - subject to change.
-  Returns a new, transient version of the collection, in constant time."
+  "Returns a new, transient version of the collection, in constant time."
   {:added "1.1"
    :static true}
   [^clojure.lang.IEditableCollection coll] 
   (.asTransient coll))
 
 (defn persistent! 
-  "Alpha - subject to change.
-  Returns a new, persistent version of the transient collection, in
+  "Returns a new, persistent version of the transient collection, in
   constant time. The transient collection cannot be used after this
   call, any such use will throw an exception."
   {:added "1.1"
@@ -2999,8 +3069,7 @@
   (.persistent coll))
 
 (defn conj!
-  "Alpha - subject to change.
-  Adds x to the transient collection, and return coll. The 'addition'
+  "Adds x to the transient collection, and return coll. The 'addition'
   may happen at different 'places' depending on the concrete type."
   {:added "1.1"
    :static true}
@@ -3008,8 +3077,7 @@
   (.conj coll x))
 
 (defn assoc!
-  "Alpha - subject to change.
-  When applied to a transient map, adds mapping of key(s) to
+  "When applied to a transient map, adds mapping of key(s) to
   val(s). When applied to a transient vector, sets the val at index.
   Note - index must be <= (count vector). Returns coll."
   {:added "1.1"
@@ -3022,8 +3090,7 @@
        ret))))
 
 (defn dissoc!
-  "Alpha - subject to change.
-  Returns a transient map that doesn't contain a mapping for key(s)."
+  "Returns a transient map that doesn't contain a mapping for key(s)."
   {:added "1.1"
    :static true}
   ([^clojure.lang.ITransientMap map key] (.without map key))
@@ -3034,8 +3101,7 @@
        ret))))
 
 (defn pop!
-  "Alpha - subject to change.
-  Removes the last item from a transient vector. If
+  "Removes the last item from a transient vector. If
   the collection is empty, throws an exception. Returns coll"
   {:added "1.1"
    :static true}
@@ -3043,8 +3109,7 @@
   (.pop coll)) 
 
 (defn disj!
-  "Alpha - subject to change.
-  disj[oin]. Returns a transient set of the same (hashed/sorted) type, that
+  "disj[oin]. Returns a transient set of the same (hashed/sorted) type, that
   does not contain key(s)."
   {:added "1.1"
    :static true}
@@ -3278,6 +3343,7 @@
        (instance? clojure.lang.BigInt x) x
        (instance? BigInteger x) (clojure.lang.BigInt/fromBigInteger x)
        (decimal? x) (bigint (.toBigInteger ^BigDecimal x))
+       (float? x)  (bigint (. BigDecimal valueOf (double x)))
        (ratio? x) (bigint (.bigIntegerValue ^clojure.lang.Ratio x))
        (number? x) (clojure.lang.BigInt/valueOf (long x))
        :else (bigint (BigInteger. x))))
@@ -3291,6 +3357,7 @@
        (instance? BigInteger x) x
        (instance? clojure.lang.BigInt x) (.toBigInteger ^clojure.lang.BigInt x)
        (decimal? x) (.toBigInteger ^BigDecimal x)
+       (float? x) (.toBigInteger (. BigDecimal valueOf (double x)))
        (ratio? x) (.bigIntegerValue ^clojure.lang.Ratio x)
        (number? x) (BigInteger/valueOf (long x))
        :else (BigInteger. x)))
@@ -4017,7 +4084,8 @@
                                                (dissoc bes (key entry))
                                                ((key entry) bes)))
                                      (dissoc b :as :or)
-                                     {:keys #(keyword (str %)), :strs str, :syms #(list `quote %)})]
+                                     {:keys #(if (keyword? %) % (keyword (str %))),
+                                      :strs str, :syms #(list `quote %)})]
                            (if (seq bes)
                              (let [bb (key (first bes))
                                    bk (val (first bes))
@@ -4028,14 +4096,17 @@
                                       (next bes)))
                              ret))))]
                  (cond
-                  (symbol? b) (-> bvec (conj b) (conj v))
+                  (symbol? b) (-> bvec (conj (if (namespace b) (symbol (name b)) b)) (conj v))
+                  (keyword? b) (-> bvec (conj (symbol (name b))) (conj v))
                   (vector? b) (pvec bvec b v)
                   (map? b) (pmap bvec b v)
                   :else (throw (new Exception (str "Unsupported binding form: " b))))))
         process-entry (fn [bvec b] (pb bvec (first b) (second b)))]
     (if (every? symbol? (map first bents))
       bindings
-      (reduce1 process-entry [] bents))))
+      (if-let [kwbs (seq (filter #(keyword? (first %)) bents))]
+        (throw (new Exception (str "Unsupported binding key: " (ffirst kwbs))))
+        (reduce1 process-entry [] bents)))))
 
 (defmacro let
   "binding => binding-form init-expr
@@ -4330,8 +4401,7 @@
 
 (import clojure.lang.ExceptionInfo clojure.lang.IExceptionInfo)
 (defn ex-info
-  "Alpha - subject to change.
-   Create an instance of ExceptionInfo, a RuntimeException subclass
+  "Create an instance of ExceptionInfo, a RuntimeException subclass
    that carries a map of additional data."
   {:added "1.4"}
   ([msg map]
@@ -4340,8 +4410,7 @@
      (ExceptionInfo. msg map cause)))
 
 (defn ex-data
-  "Alpha - subject to change.
-   Returns exception data (a map) if ex is an IExceptionInfo.
+  "Returns exception data (a map) if ex is an IExceptionInfo.
    Otherwise returns nil."
   {:added "1.4"}
   [ex]
@@ -4668,6 +4737,38 @@
   {:added "1.0"
    :static true}
   [x] (. clojure.lang.Util (hasheq x)))
+
+
+(defn mix-collection-hash
+  "Mix final collection hash for ordered or unordered collections.
+   hash-basis is the combined collection hash, count is the number
+   of elements included in the basis. Note this is the hash code
+   consistent with =, different from .hashCode.
+   See http://clojure.org/data_structures#hash for full algorithms."
+  {:added "1.6"
+   :static true}
+  ^long
+  [^long hash-basis ^long count] (clojure.lang.Murmur3/mixCollHash hash-basis count))
+
+(defn hash-ordered-coll
+  "Returns the hash code, consistent with =, for an external ordered
+   collection implementing Iterable.
+   See http://clojure.org/data_structures#hash for full algorithms."
+  {:added "1.6"
+   :static true}
+  ^long
+  [coll] (clojure.lang.Murmur3/hashOrdered coll))
+
+(defn hash-unordered-coll
+  "Returns the hash code, consistent with =, for an external unordered
+   collection implementing Iterable. For maps, the iterator should
+   return map entries whose hash is computed as
+     (hash-ordered-coll [k v]).
+   See http://clojure.org/data_structures#hash for full algorithms."
+  {:added "1.6"
+   :static true}
+  ^long
+  [coll] (clojure.lang.Murmur3/hashUnordered coll))
 
 (defn interpose
   "Returns a lazy seq of the elements of coll separated by sep"
@@ -5289,7 +5390,7 @@
   *loading-verbosely* false)
 
 (defn- throw-if
-  "Throws an exception with a message if pred is true"
+  "Throws a CompilerException with a message if pred is true"
   [pred fmt & args]
   (when pred
     (let [^String message (apply format fmt args)
@@ -5298,7 +5399,11 @@
           boring? #(not= (.getMethodName ^StackTraceElement %) "doInvoke")
           trace (into-array (drop 2 (drop-while boring? raw-trace)))]
       (.setStackTrace exception trace)
-      (throw exception))))
+      (throw (clojure.lang.Compiler$CompilerException.
+              *file*
+              (.deref clojure.lang.Compiler/LINE)
+              (.deref clojure.lang.Compiler/COLUMN)
+              exception)))))
 
 (defn- libspec?
   "Returns true if x is a libspec"
@@ -5362,7 +5467,8 @@
   "Loads a lib with options"
   [prefix lib & options]
   (throw-if (and prefix (pos? (.indexOf (name lib) (int \.))))
-            "lib names inside prefix lists must not contain periods")
+            "Found lib name '%s' containing period with prefix '%s'.  lib names inside prefix lists must not contain periods"
+            (name lib) prefix)
   (let [lib (if prefix (symbol (str prefix \. lib)) lib)
         opts (apply hash-map options)
         {:keys [as reload reload-all require use verbose]} opts
@@ -5432,7 +5538,7 @@
     (let [pending (map #(if (= % path) (str "[ " % " ]") %)
                        (cons path *pending-paths*))
           chain (apply str (interpose "->" pending))]
-      (throw (Exception. (str "Cyclic load dependency: " chain))))))
+      (throw-if true "Cyclic load dependency: %s" chain))))
 
 ;; Public
 
@@ -5795,7 +5901,7 @@
 (add-doc-and-meta *file*
   "The path of the file being evaluated, as a String.
 
-  Evaluates to nil when there is no file, eg. in the REPL."
+  When there is no file, e.g. in the REPL, the value is not defined."
   {:added "1.0"})
 
 (add-doc-and-meta *command-line-args*
@@ -6030,7 +6136,7 @@
   (let [buckets (loop [m {} ks tests vs thens]
                   (if (and ks vs)
                     (recur
-                      (update-in m [(hash (first ks))] (fnil conj []) [(first ks) (first vs)])
+                      (update-in m [(clojure.lang.Util/hash (first ks))] (fnil conj []) [(first ks) (first vs)])
                       (next ks) (next vs))
                     m))
         assoc-multi (fn [m h bucket]
@@ -6057,17 +6163,18 @@
   post-switch equivalence checking must not be done (occurs with hash
   collisions)."
   [expr-sym default tests thens]
-  (let [hashes (into1 #{} (map hash tests))]
+  (let [hashcode #(clojure.lang.Util/hash %)
+        hashes (into1 #{} (map hashcode tests))]
     (if (== (count tests) (count hashes))
       (if (fits-table? hashes)
         ; compact case ints, no shift-mask
-        [0 0 (case-map hash identity tests thens) :compact]
+        [0 0 (case-map hashcode identity tests thens) :compact]
         (let [[shift mask] (or (maybe-min-hash hashes) [0 0])]
           (if (zero? mask)
             ; sparse case ints, no shift-mask
-            [0 0 (case-map hash identity tests thens) :sparse]
+            [0 0 (case-map hashcode identity tests thens) :sparse]
             ; compact case ints, with shift-mask
-            [shift mask (case-map #(shift-mask shift mask (hash %)) identity tests thens) :compact])))
+            [shift mask (case-map #(shift-mask shift mask (hashcode %)) identity tests thens) :compact])))
       ; resolve hash collisions and try again
       (let [[tests thens skip-check] (merge-hash-collisions expr-sym default tests thens)
             [shift mask case-map switch-type] (prep-hashes expr-sym default tests thens)
@@ -6431,8 +6538,7 @@
          "-SNAPSHOT")))
 
 (defn promise
-  "Alpha - subject to change.
-  Returns a promise object that can be read with deref/@, and set,
+  "Returns a promise object that can be read with deref/@, and set,
   once only, with deliver. Calls to deref/@ prior to delivery will
   block, unless the variant of deref with timeout is used. All
   subsequent derefs will return the same delivered value without
@@ -6463,8 +6569,7 @@
         this)))))
 
 (defn deliver
-  "Alpha - subject to change.
-  Delivers the supplied value to the promise, releasing any pending
+  "Delivers the supplied value to the promise, releasing any pending
   derefs. A subsequent call to deliver on a promise will have no effect."
   {:added "1.1"
    :static true}
